@@ -1,0 +1,34 @@
+{
+  "name": "@wa-os/native-host",
+  "version": "0.1.0",
+  "description": "N-API addon hosting native_process services (echo)",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "author": "Michał Łaszczewski",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "install": "cmake-js compile",
+    "rebuild": "cmake-js rebuild",
+    "test": "tsx ../node_modules/mocha/bin/mocha.js --timeout 20000 'tests/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@wa-os/ts-kernel": "*",
+    "@wa-os/ts-rpc": "*",
+    "node-addon-api": "^8.3.0"
+  },
+  "devDependencies": {
+    "cmake-js": "^7.3.0",
+    "typescript": "~5.9.0",
+    "@types/chai": "^4.3.11",
+    "@types/mocha": "^10.0.0",
+    "@types/node": "^22.18.11",
+    "chai": "^4.3.10",
+    "mocha": "^10.2.0",
+    "tsx": "^4.7.0"
+  },
+  "cmake-js": {
+    "runtime": "node",
+    "runtimeVersion": null
+  }
+}
