@@ -1,13 +1,20 @@
 #include <napi.h>
+#include <uv.h>
 
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "echo_service.hpp"
 #include "service_registry.hpp"
+#include "native_service.hpp"
+
+#ifdef NATIVE_HOST_DB
+#include "db_service.hpp"
+#endif
 
 #include <native/native_process.hpp>
 
@@ -61,11 +68,13 @@ namespace {
       NativeProcessHandle(const Napi::CallbackInfo& info)
           : Napi::ObjectWrap<NativeProcessHandle>(info) {}
 
-      std::unique_ptr<native_process> proc;
+      std::unique_ptr<waos::native_host::native_service> service;
       std::string service_type;
       // Sync JS callbacks: I/O owner is the JS thread for v1.
       Napi::FunctionReference flush_cb;
       Napi::FunctionReference drain_cb;
+      uv_async_t io_wake_async{};
+      bool io_wake_async_open = false;
 
       static NativeProcessHandle* UnwrapHandle(const Napi::Value& value) {
         if(!value.IsObject()) {
@@ -75,21 +84,82 @@ namespace {
       }
   };
 
+  native_process* try_np(NativeProcessHandle* wrap) {
+    if(!wrap || !wrap->service) {
+      return nullptr;
+    }
+    return &wrap->service->process();
+  }
+
+  native_process& np(NativeProcessHandle* wrap) {
+    auto* p = try_np(wrap);
+    if(!p) {
+      throw Napi::Error::New(wrap->Env(), "native process not created");
+    }
+    return *p;
+  }
+
   Napi::FunctionReference NativeProcessHandle::constructor;
+
+  void on_io_wake(uv_async_t* handle) {
+    auto* wrap = static_cast<NativeProcessHandle*>(handle->data);
+    if(!wrap || !wrap->service) {
+      return;
+    }
+    try {
+      auto& proc = wrap->service->process();
+      for(std::uint32_t s = 0; s < proc.socket_count(); ++s) {
+        if(proc.is_socket_open(s)) {
+          proc.handle_drain(s);
+        }
+      }
+    } catch(...) {
+    }
+  }
 
   Napi::Value CreateNativeProcess(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if(info.Length() < 3) {
-      throw Napi::TypeError::New(env, "createNativeProcess(serviceType, id, socketCount)");
+      throw Napi::TypeError::New(env, "createNativeProcess(serviceType, id, socketCount, opts?)");
     }
     std::string service_type = info[0].As<Napi::String>().Utf8Value();
     std::uint32_t id = info[1].As<Napi::Number>().Uint32Value();
     std::uint32_t socket_count = info[2].As<Napi::Number>().Uint32Value();
+    waos::native_host::service_create_opts opts;
+    if(info.Length() > 3 && info[3].IsObject()) {
+      Napi::Object o = info[3].As<Napi::Object>();
+      if(o.Has("dataDir") && o.Get("dataDir").IsString()) {
+        opts.data_dir = o.Get("dataDir").As<Napi::String>().Utf8Value();
+      }
+      if(o.Has("bufSize") && o.Get("bufSize").IsNumber()) {
+        opts.buf_size = o.Get("bufSize").As<Napi::Number>().Uint32Value();
+      }
+    }
 
     Napi::Object obj = NativeProcessHandle::constructor.New({});
     auto* wrap = NativeProcessHandle::Unwrap(obj);
     wrap->service_type = service_type;
-    wrap->proc = registry().create(service_type, id, socket_count);
+    try {
+      wrap->service = registry().create(service_type, id, socket_count, opts);
+    } catch(const std::exception& e) {
+      throw Napi::Error::New(env, e.what());
+    }
+    uv_loop_t* loop = nullptr;
+    napi_get_uv_event_loop(env, &loop);
+    uv_async_init(loop, &wrap->io_wake_async, on_io_wake);
+    wrap->io_wake_async.data = wrap;
+    wrap->io_wake_async_open = true;
+    // Echo does not wait on WAL completions. Unref so mocha can exit if the
+    // test skips kill(). DB fill/batch needs the handle to keep the loop alive
+    // until uv_async_send from the WAL worker.
+    if(service_type != "db") {
+      uv_unref(reinterpret_cast<uv_handle_t*>(&wrap->io_wake_async));
+    }
+    wrap->service->set_io_wake([wrap]() {
+      if(wrap->io_wake_async_open) {
+        uv_async_send(&wrap->io_wake_async);
+      }
+    });
     return obj;
   }
 
@@ -98,48 +168,63 @@ namespace {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
     std::uint32_t index = info[1].As<Napi::Number>().Uint32Value();
     std::uint32_t buf_size = info[2].As<Napi::Number>().Uint32Value();
-    wrap->proc->open_socket(index, buf_size);
-    auto on_opened = registry().on_socket_opened(wrap->service_type);
-    if(on_opened) {
-      on_opened(*wrap->proc, index);
-    }
+    np(wrap).open_socket(index, buf_size);
+    wrap->service->on_socket_opened(index);
     return env.Undefined();
   }
 
   Napi::Value CloseSocket(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
     std::uint32_t index = info[1].As<Napi::Number>().Uint32Value();
-    wrap->proc->close_socket(index);
+    np(wrap).close_socket(index);
     return info.Env().Undefined();
   }
 
   Napi::Value IsSocketOpen(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
     std::uint32_t index = info[1].As<Napi::Number>().Uint32Value();
-    return Napi::Boolean::New(info.Env(), wrap->proc->is_socket_open(index));
+    return Napi::Boolean::New(info.Env(), np(wrap).is_socket_open(index));
   }
 
   Napi::Value HandleData(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    wrap->proc->handle_data(info[1].As<Napi::Number>().Uint32Value());
-    return info.Env().Undefined();
+    auto* proc = try_np(wrap);
+    if(!proc) {
+      return env.Undefined();
+    }
+    try {
+      proc->handle_data(info[1].As<Napi::Number>().Uint32Value());
+    } catch(const std::exception& e) {
+      throw Napi::Error::New(env, e.what());
+    }
+    return env.Undefined();
   }
 
   Napi::Value HandleDrain(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    wrap->proc->handle_drain(info[1].As<Napi::Number>().Uint32Value());
-    return info.Env().Undefined();
+    auto* proc = try_np(wrap);
+    if(!proc) {
+      return env.Undefined();
+    }
+    try {
+      proc->handle_drain(info[1].As<Napi::Number>().Uint32Value());
+    } catch(const std::exception& e) {
+      throw Napi::Error::New(env, e.what());
+    }
+    return env.Undefined();
   }
 
   Napi::Value Flush(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    wrap->proc->flush(info[1].As<Napi::Number>().Uint32Value());
+    np(wrap).flush(info[1].As<Napi::Number>().Uint32Value());
     return info.Env().Undefined();
   }
 
   Napi::Value Drain(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    wrap->proc->drain(info[1].As<Napi::Number>().Uint32Value());
+    np(wrap).drain(info[1].As<Napi::Number>().Uint32Value());
     return info.Env().Undefined();
   }
 
@@ -148,13 +233,16 @@ namespace {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
     wrap->flush_cb = Napi::Persistent(info[1].As<Napi::Function>());
     wrap->flush_cb.SuppressDestruct();
-    wrap->proc->set_flush_callback([wrap](std::uint32_t socket) {
+    np(wrap).set_flush_callback([wrap](std::uint32_t socket) {
       if(wrap->flush_cb.IsEmpty()) {
         return;
       }
-      Napi::Env env = wrap->flush_cb.Env();
-      Napi::HandleScope scope(env);
-      wrap->flush_cb.Call({Napi::Number::New(env, socket)});
+      try {
+        Napi::Env env = wrap->flush_cb.Env();
+        Napi::HandleScope scope(env);
+        wrap->flush_cb.Call({Napi::Number::New(env, socket)});
+      } catch(...) {
+      }
     });
     return env.Undefined();
   }
@@ -164,13 +252,16 @@ namespace {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
     wrap->drain_cb = Napi::Persistent(info[1].As<Napi::Function>());
     wrap->drain_cb.SuppressDestruct();
-    wrap->proc->set_drain_callback([wrap](std::uint32_t socket) {
+    np(wrap).set_drain_callback([wrap](std::uint32_t socket) {
       if(wrap->drain_cb.IsEmpty()) {
         return;
       }
-      Napi::Env env = wrap->drain_cb.Env();
-      Napi::HandleScope scope(env);
-      wrap->drain_cb.Call({Napi::Number::New(env, socket)});
+      try {
+        Napi::Env env = wrap->drain_cb.Env();
+        Napi::HandleScope scope(env);
+        wrap->drain_cb.Call({Napi::Number::New(env, socket)});
+      } catch(...) {
+      }
     });
     return env.Undefined();
   }
@@ -191,7 +282,7 @@ namespace {
       drain_ref->SuppressDestruct();
     }
 
-    wrap->proc->register_socket_handler(
+    np(wrap).register_socket_handler(
         index,
         [data_ref, index]() {
           Napi::Env env = data_ref->Env();
@@ -210,7 +301,15 @@ namespace {
 
   Napi::Value Kill(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    wrap->proc->kill(std::nullopt);
+    if(wrap->service) {
+      wrap->service->set_io_wake({});
+      wrap->service->kill();
+      wrap->service.reset();
+    }
+    if(wrap->io_wake_async_open) {
+      wrap->io_wake_async_open = false;
+      uv_close(reinterpret_cast<uv_handle_t*>(&wrap->io_wake_async), nullptr);
+    }
     wrap->flush_cb.Reset();
     wrap->drain_cb.Reset();
     return info.Env().Undefined();
@@ -218,24 +317,25 @@ namespace {
 
   Napi::Value IsAlive(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    return Napi::Boolean::New(info.Env(), wrap->proc->is_alive());
+    auto* proc = try_np(wrap);
+    return Napi::Boolean::New(info.Env(), proc && proc->is_alive());
   }
 
   Napi::Value Id(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    return Napi::Number::New(info.Env(), static_cast<double>(wrap->proc->id()));
+    return Napi::Number::New(info.Env(), static_cast<double>(np(wrap).id()));
   }
 
   Napi::Value SocketCount(const Napi::CallbackInfo& info) {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
-    return Napi::Number::New(info.Env(), static_cast<double>(wrap->proc->socket_count()));
+    return Napi::Number::New(info.Env(), static_cast<double>(np(wrap).socket_count()));
   }
 
   Napi::Value BufferRef(const Napi::CallbackInfo& info, buffer_direction fixed_dir) {
     Napi::Env env = info.Env();
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
     std::uint32_t index = info[1].As<Napi::Number>().Uint32Value();
-    circular_buffer& buf = select_buffer(*wrap->proc, index, fixed_dir);
+    circular_buffer& buf = select_buffer(np(wrap), index, fixed_dir);
     if(buf.data == nullptr) {
       throw Napi::Error::New(env, "buffer not initialized");
     }
@@ -272,7 +372,7 @@ namespace {
     auto* wrap = NativeProcessHandle::UnwrapHandle(info[0]);
     std::uint32_t index = info[1].As<Napi::Number>().Uint32Value();
     buffer_direction dir = parse_direction(info[2]);
-    return select_buffer(*wrap->proc, index, dir);
+    return select_buffer(np(wrap), index, dir);
   }
 
   Napi::Value BufferReadableBytes(const Napi::CallbackInfo& info) {
@@ -444,8 +544,8 @@ namespace {
     std::uint32_t src_socket = info[4].As<Napi::Number>().Uint32Value();
     buffer_direction src_dir = parse_direction(info[5]);
 
-    circular_buffer& src = select_buffer(*src_wrap->proc, src_socket, src_dir);
-    circular_buffer& dest = select_buffer(*dest_wrap->proc, dest_socket, dest_dir);
+    circular_buffer& src = select_buffer(np(src_wrap), src_socket, src_dir);
+    circular_buffer& dest = select_buffer(np(dest_wrap), dest_socket, dest_dir);
 
     size_t readable = circular_buffer_readable_bytes(&src);
     size_t writable = circular_buffer_writable_bytes(&dest);
@@ -486,7 +586,7 @@ namespace {
   Napi::Object Init(Napi::Env env, Napi::Object exports) {
     waos::native_host::register_echo_service();
 #ifdef NATIVE_HOST_DB
-    // register_db_service();
+    waos::native_host::register_db_service();
 #endif
 
     NativeProcessHandle::Init(env, exports);
