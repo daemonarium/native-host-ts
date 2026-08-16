@@ -13,6 +13,7 @@
     "rebuild:db": "cmake-js reconfigure --directory . --out build --cxx ../cpp-compiler/sysroot/usr/local/bin/clang++ --cc ../cpp-compiler/sysroot/usr/local/bin/clang --CDNATIVE_HOST_DB=ON && cmake-js build --directory . --out build --CDNATIVE_HOST_DB=ON",
     "bench:db": "tsx bench/db-rpc.mts",
     "bench:db-wasm": "tsx bench/db-wasm.mts",
+    "bench:db-ram-wasm": "tsx bench/db-ram-wasm.mts",
     "test": "tsx ../node_modules/mocha/bin/mocha.js --timeout 20000 'tests/**/*.test.ts'"
   },
   "dependencies": {

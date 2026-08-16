@@ -291,12 +291,9 @@ export function createDbCodecs(registry: TypeRegistry): CodecRegistry {
   const codecs = new CodecRegistry()
   ensureRpcTypesInRegistry(registry)
   ensureRpcCodecs(codecs, registry)
-  for (const type of registry.getTypes()) {
-    if (type.kind !== TypeKind.Message) {
-      continue
-    }
-    if (codecs.messages.has(type.name)) {
-      continue
+  const registerMessage = (type: TypeDescription) => {
+    if (type.kind !== TypeKind.Message || codecs.messages.has(type.name)) {
+      return
     }
     codecs.messages.register({
       name: type.name,
@@ -307,6 +304,16 @@ export function createDbCodecs(registry: TypeRegistry): CodecRegistry {
         deserializeValueByType(reader, registry, type, output)
       },
     })
+  }
+  // Wire indexes must match C++ setup_server_ / attachDbMessages, not blob order.
+  for (const name of DB_MESSAGES) {
+    const type = registry.getTypeByName(name)
+    if (type) {
+      registerMessage(type)
+    }
+  }
+  for (const type of registry.getTypes()) {
+    registerMessage(type)
   }
   return codecs
 }
