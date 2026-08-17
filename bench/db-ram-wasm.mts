@@ -4,16 +4,21 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Direction, LocalProcess, ModuleProcess } from '@wa-os/ts-kernel'
 import {
+  CodecRegistry,
   deserializeTypeRegistry,
+  ensureRpcCodecs,
+  registerDynamicCodecs,
   SocketRpcClient,
   type LocalSocket,
 } from '@wa-os/ts-rpc'
 import { setupTestEnvironment } from '../../kernel-shield/ts-test/src/setup.ts'
-import { attachDbMessages, createDbCodecs, emptyScanQuery } from './dbRegistry.ts'
-import { fillViaRpc, makeKey, printPhase } from './harness.ts'
+import { createDbCodecs } from './dbRegistry.ts'
+import { fillViaRpc, printPhase } from './harness.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const KV_WASM = join(__dirname, '../../cmake-build-emscripten/kv-storage-mem.wasm')
+const CLIENT_WASM = process.env.DB_BENCH_WASM
+  ?? join(__dirname, '../../cmake-build-emscripten/examples/modules/db_bench_client.wasm')
 const SHIELD_ID = 1
 const SOCKET_OPTS = {
   inputBufferSize: 65536,
@@ -30,9 +35,12 @@ function parseArgs(argv: string[]) {
   let n = 2000
   let doGet = true
   let doScan = true
+  let wasmPath = CLIENT_WASM
   for (const a of argv) {
     if (a.startsWith('--n=')) {
       n = Number(a.slice(4))
+    } else if (a.startsWith('--wasm=')) {
+      wasmPath = a.slice(7)
     } else if (a.startsWith('--phases=')) {
       doGet = false
       doScan = false
@@ -44,13 +52,13 @@ function parseArgs(argv: string[]) {
       n = Number(a)
     }
   }
-  return { n, doGet, doScan }
+  return { n, doGet, doScan, wasmPath }
 }
 
 function methodId(registry: ReturnType<typeof deserializeTypeRegistry>, suffix: string): number {
   const methods = registry.getMethods()
   const hit = methods.find(
-    (m) => m.memberName === suffix || m.memberName.endsWith('.' + suffix) || m.memberName.endsWith(suffix)
+    (m) => m.memberName === suffix || m.memberName.endsWith('.' + suffix)
   )
   if (!hit) {
     throw new Error(`missing method ${suffix}; have ${methods.map((m) => m.memberName).join(',')}`)
@@ -58,33 +66,39 @@ function methodId(registry: ReturnType<typeof deserializeTypeRegistry>, suffix: 
   return hit.methodId
 }
 
+function requireSetPid(mod: ModuleProcess, label: string): (pid: number) => void {
+  const setPid = mod.instance?.exports.waos_set_process_id as ((pid: number) => void) | undefined
+  if (!setPid) {
+    throw new Error(`${label} is missing waos_set_process_id`)
+  }
+  return setPid
+}
+
 async function main() {
   const cfg = parseArgs(process.argv.slice(2))
-  console.log(`BENCH start n=${cfg.n} layer=ram-wasm wasm=${KV_WASM}`)
+  console.log(
+    `BENCH start n=${cfg.n} layer=ram-wasm-client kv=${KV_WASM} wasm=${cfg.wasmPath}`
+  )
 
   const ctx = await setupTestEnvironment()
-  const code = await readFile(KV_WASM)
-  const dbPid = await ctx.kernel.spawn(code, 2048, 10_000_000)
+  const dbCode = await readFile(KV_WASM)
+  const dbPid = await ctx.kernel.spawn(dbCode, 2048, 10_000_000)
   const db = ctx.kernel.processes[dbPid] as ModuleProcess
-  const setPid = db.instance?.exports.waos_set_process_id as ((pid: number) => void) | undefined
-  if (!setPid) {
-    throw new Error('kv-storage-mem.wasm is missing waos_set_process_id')
-  }
-  setPid(dbPid)
+  requireSetPid(db, 'kv-storage-mem.wasm')(dbPid)
 
   const registerId = methodId(ctx.rpcRegistry, 'register_process')
   const bindId = methodId(ctx.rpcRegistry, 'bind')
   await ctx.rpcClient.call(registerId, dbPid, 0, false)
   await ctx.rpcClient.call(bindId, dbPid, 1, SHIELD_ID, (dbPid << 1) | 1, Direction.BOTH)
 
-  const clientPid = await ctx.kernel.spawnLocal(10_000_000)
-  const client = ctx.kernel.processes[clientPid] as LocalProcess
-  await ctx.rpcClient.call(registerId, clientPid, 0, false)
+  const tsPid = await ctx.kernel.spawnLocal(10_000_000)
+  const ts = ctx.kernel.processes[tsPid] as LocalProcess
+  await ctx.rpcClient.call(registerId, tsPid, 0, false)
 
   const dbRegistry = deserializeTypeRegistry(new Uint8Array(db.readRawRpcDescription(0)))
   dbRegistry.assignMethodIds()
-  const codecs = createDbCodecs(dbRegistry)
-  const methods = {
+  const dbCodecs = createDbCodecs(dbRegistry)
+  const dbMethods = {
     get: methodId(dbRegistry, 'get'),
     set: methodId(dbRegistry, 'set'),
     batch: methodId(dbRegistry, 'batch'),
@@ -94,48 +108,52 @@ async function main() {
     cancel_scan: methodId(dbRegistry, 'cancel_scan'),
   }
 
-  const controlSock = client.createSocket(0, SOCKET_OPTS)
-  await ctx.kernel.bind(clientPid, 0, dbPid, 0, Direction.BOTH)
-  const control = new SocketRpcClient(controlSock as LocalSocket, dbRegistry, codecs)
-  attachDbMessages(control)
+  const fillSock = ts.createSocket(0, SOCKET_OPTS)
+  await ctx.kernel.bind(tsPid, 0, dbPid, 0, Direction.BOTH)
+  const fillClient = new SocketRpcClient(fillSock as LocalSocket, dbRegistry, dbCodecs)
+  await fillViaRpc(fillClient, dbMethods, cfg.n)
+  await ctx.kernel.unbind(tsPid, 0, dbPid, 0, Direction.BOTH)
 
-  const privateSock = client.createSocket(1, SOCKET_OPTS)
-  const priv = new SocketRpcClient(privateSock as LocalSocket, dbRegistry, codecs)
-  attachDbMessages(priv)
-  const opened = new Promise<void>((resolve) => {
-    priv.onMessage('db_socket_opened', () => resolve())
-  })
-  await control.call(methods.open_socket, BigInt(clientPid), 1)
-  await opened
+  const clientCode = await readFile(cfg.wasmPath)
+  const wasmClientPid = await ctx.kernel.spawn(clientCode, 2048, 10_000_000)
+  const wasmClient = ctx.kernel.processes[wasmClientPid] as ModuleProcess
+  requireSetPid(wasmClient, 'db_bench_client.wasm')(wasmClientPid)
+  await ctx.rpcClient.call(registerId, wasmClientPid, 0, false)
+  await ctx.kernel.bind(wasmClientPid, 1, dbPid, 0, Direction.BOTH)
 
-  await fillViaRpc(control, methods, cfg.n)
+  const userSock = ts.createSocket(10, SOCKET_OPTS)
+  await ctx.kernel.bind(tsPid, 10, wasmClientPid, 0, Direction.BOTH)
+  const userRegistry = deserializeTypeRegistry(new Uint8Array(wasmClient.readRawRpcDescription(0)))
+  userRegistry.assignMethodIds()
+  const userCodecs = new CodecRegistry()
+  registerDynamicCodecs(userCodecs, userRegistry)
+  ensureRpcCodecs(userCodecs, userRegistry)
+  const userClient = new SocketRpcClient(userSock as LocalSocket, userRegistry, userCodecs)
+  const getId = methodId(userRegistry, 'bench_get')
+  const scanId = methodId(userRegistry, 'bench_scan')
 
   if (cfg.doGet) {
-    const t0 = performance.now()
-    for (let i = 0; i < cfg.n; i++) {
-      await control.call(methods.get, makeKey(i))
+    const r = await userClient.call(getId, cfg.n) as {
+      keys?: number | bigint
+      ms?: number
+      keys_per_s?: number
     }
-    printPhase('ram-wasm', 'get', cfg.n, performance.now() - t0)
+    const keys = Number(r.keys ?? 0)
+    printPhase('ram-wasm-client', 'get', keys, Number(r.ms ?? 0))
   }
 
   if (cfg.doScan) {
-    const done = new Promise<number>((resolve, reject) => {
-      let count = 0
-      priv.onMessage('db_scan_item', () => {
-        count++
-      })
-      priv.onMessage('db_scan_done', () => resolve(count))
-      priv.onMessage('db_scan_error', (msg) => {
-        reject(new Error((msg as { message?: string }).message ?? 'scan error'))
-      })
-    })
-    const t0 = performance.now()
-    await control.call(methods.start_scan, BigInt(clientPid), 1, emptyScanQuery(false))
-    const keys = await done
-    printPhase('ram-wasm', 'scan', keys, performance.now() - t0)
+    const r = await userClient.call(scanId) as {
+      keys?: number | bigint
+      ms?: number
+      keys_per_s?: number
+    }
+    const keys = Number(r.keys ?? 0)
+    printPhase('ram-wasm-client', 'scan', keys, Number(r.ms ?? 0))
   }
 
   console.log('BENCH done')
+  await ctx.kernel.kill(wasmClientPid)
   await ctx.kernel.kill(dbPid)
 }
 

@@ -60,7 +60,7 @@ function parseArgs(argv: string[]) {
 
 function methodId(registry: ReturnType<typeof deserializeTypeRegistry>, suffix: string): number {
   const methods = registry.getMethods()
-  const hit = methods.find((m) => m.memberName === suffix || m.memberName.endsWith('.' + suffix) || m.memberName.endsWith(suffix))
+  const hit = methods.find((m) => m.memberName === suffix || m.memberName.endsWith('.' + suffix))
   if (!hit) {
     throw new Error(`missing method ${suffix}; have ${methods.map((m) => m.memberName).join(',')}`)
   }
@@ -87,6 +87,11 @@ async function main() {
     const wasm = new ModuleProcess(kernel, WASM_ID, 2048, 10_000_000)
     await wasm.setModuleCode(wasmCode)
     await wasm.start()
+    const setPid = wasm.instance?.exports.waos_set_process_id as ((pid: number) => void) | undefined
+    if (!setPid) {
+      throw new Error('db_bench_client.wasm is missing waos_set_process_id')
+    }
+    setPid(WASM_ID)
     registerInKernel(kernel, wasm, WASM_ID)
 
     await kernel.bind(WASM_ID, 1, DB_ID, 0, Direction.BOTH)
