@@ -162,7 +162,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
     })
 
     const opened = new Promise<void>((resolve) => {
-      priv.onMessage('stream_opened', () => resolve())
+      priv.onMessage('socket_opened', () => resolve())
     })
     await control.call(methods.open_socket, channelHandle(clientPid, 1))
     await opened

@@ -13,7 +13,7 @@ import {
 } from '@wa-os/ts-rpc'
 
 export const DB_MESSAGES = [
-  'stream_opened',
+  'socket_opened',
   'stream_item',
   'stream_key',
   'stream_done',
@@ -21,6 +21,7 @@ export const DB_MESSAGES = [
   'stream_reset',
   'db_visible_event',
   'db_durable_event',
+  'stream_opened',
 ] as const
 
 export interface DbMethods {
@@ -177,7 +178,7 @@ export function createDbTypeRegistry(): TypeRegistry {
   registry.registerType(dbIo)
 
   registry.registerType(TypeDescription.create({
-    name: 'stream_opened',
+    name: 'socket_opened',
     kind: TypeKind.Message,
     members: [],
   }))
@@ -226,6 +227,11 @@ export function createDbTypeRegistry(): TypeRegistry {
     name: 'db_durable_event',
     kind: TypeKind.Message,
     members: [{ name: 'request_id', type: uint64, annotations: [] }],
+  }))
+  registry.registerType(TypeDescription.create({
+    name: 'stream_opened',
+    kind: TypeKind.Message,
+    members: [{ name: 'stream_id', type: uint64, annotations: [] }],
   }))
 
   const getFn = TypeDescription.create({
