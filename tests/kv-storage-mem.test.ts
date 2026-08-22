@@ -15,6 +15,8 @@ import {
   createDbCodecs,
   DURABLE_OPTS,
   emptyScanQuery,
+  channelHandle,
+  streamHandle,
   type DbMethods,
 } from '../bench/dbRegistry.ts'
 
@@ -135,28 +137,34 @@ describe('kv-storage-mem WASM RAM DB', () => {
     const privateSock = client.createSocket(1, SOCKET_OPTS)
     priv = new SocketRpcClient(privateSock as LocalSocket, dbRegistry, codecs)
     attachDbMessages(priv)
-    priv.onMessage('db_scan_item', (msg) => {
-      const m = msg as { key: Uint8Array, value: Uint8Array, scan_uid: bigint }
-      scanWaiter?.items.push({ key: fromBin(m.key), value: fromBin(m.value), uid: m.scan_uid })
+    priv.onMessage('stream_item', (msg) => {
+      const m = msg as { key: Uint8Array, value: Uint8Array, stream_id: bigint }
+      scanWaiter?.items.push({ key: fromBin(m.key), value: fromBin(m.value), uid: m.stream_id })
     })
-    priv.onMessage('db_scan_key', (msg) => {
+    priv.onMessage('stream_key', (msg) => {
       scanWaiter?.keys.push(fromBin((msg as { key: Uint8Array }).key))
     })
-    priv.onMessage('db_scan_done', () => {
+    priv.onMessage('stream_done', () => {
       const w = scanWaiter
       scanWaiter = null
       w?.resolve({ items: w.items, keys: w.keys })
     })
-    priv.onMessage('db_scan_error', (msg) => {
+    priv.onMessage('stream_reset', () => {
+      if (scanWaiter) {
+        scanWaiter.items.length = 0
+        scanWaiter.keys.length = 0
+      }
+    })
+    priv.onMessage('stream_error', (msg) => {
       const w = scanWaiter
       scanWaiter = null
       w?.reject(new Error((msg as { message?: string }).message ?? 'scan error'))
     })
 
     const opened = new Promise<void>((resolve) => {
-      priv.onMessage('db_socket_opened', () => resolve())
+      priv.onMessage('stream_opened', () => resolve())
     })
-    await control.call(methods.open_socket, BigInt(clientPid), 1)
+    await control.call(methods.open_socket, channelHandle(clientPid, 1))
     await opened
   })
 
@@ -191,7 +199,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
       { key: toBin('c'), value: toBin('C'), timestamp: 4n },
     ], DURABLE_OPTS)
     const done = waitScan()
-    await control.call(methods.start_scan, BigInt(clientPid), 1, emptyScanQuery(false))
+    await control.call(methods.start_scan, streamHandle(clientPid, 1, 1n), emptyScanQuery(false))
     const result = await done
     const keys = result.items.map((i) => i.key)
     expect(keys).to.include('b')
@@ -200,7 +208,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
 
   it('keys_only reverse scan with limit', async () => {
     const done = waitScan()
-    await control.call(methods.start_scan, BigInt(clientPid), 1, {
+    await control.call(methods.start_scan, streamHandle(clientPid, 1, 2n), {
       ...emptyScanQuery(true),
       reverse: true,
       limit: 2n,
@@ -209,7 +217,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
     expect(result.keys.length).to.equal(2)
   })
 
-  it('cancel_scan emits db_scan_done', async () => {
+  it('cancel_scan emits stream_done', async () => {
     await control.call(methods.batch, [
       { key: toBin('k0'), value: toBin('v'), timestamp: 10n },
       { key: toBin('k1'), value: toBin('v'), timestamp: 11n },
@@ -217,7 +225,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
     ], DURABLE_OPTS)
 
     const done = waitScan()
-    await control.call(methods.start_scan, BigInt(clientPid), 1, emptyScanQuery(false))
+    await control.call(methods.start_scan, streamHandle(clientPid, 1, 1n), emptyScanQuery(false))
     const result = await done
     if (result.items.length > 0) {
       await control.call(methods.cancel_scan, result.items[0].uid)
@@ -248,7 +256,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
     await control.call(methods.set, toBin('live'), toBin('old'), 30n, DURABLE_OPTS)
     await control.call(methods.set, toBin('live'), toBin('new'), 31n, DURABLE_OPTS)
     const done = waitScan()
-    await control.call(methods.start_scan, BigInt(clientPid), 1, {
+    await control.call(methods.start_scan, streamHandle(clientPid, 1, 2n), {
       ...emptyScanQuery(false),
       lower: toBin('live'),
       lower_mode: 2,
@@ -257,5 +265,20 @@ describe('kv-storage-mem WASM RAM DB', () => {
     })
     const result = await done
     expect(result.items.map((i) => i.value)).to.deep.equal(['new'])
+  })
+
+  it('delta scan emits only keys newer than since_timestamp', async () => {
+    await control.call(methods.set, toBin('d1'), toBin('1'), 100n, DURABLE_OPTS)
+    await control.call(methods.set, toBin('d2'), toBin('2'), 101n, DURABLE_OPTS)
+    await control.call(methods.set, toBin('d3'), toBin('3'), 102n, DURABLE_OPTS)
+    const done = waitScan()
+    await control.call(
+      methods.start_scan,
+      streamHandle(clientPid, 1, 3n, 101n),
+      emptyScanQuery(false)
+    )
+    const result = await done
+    const hit = result.items.filter((i) => i.key.startsWith('d'))
+    expect(hit.map((i) => i.key)).to.deep.equal(['d3'])
   })
 })

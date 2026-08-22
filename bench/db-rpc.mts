@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Kernel } from '@wa-os/ts-kernel'
-import { emptyScanQuery } from './dbRegistry.ts'
+import { emptyScanQuery, streamHandle } from './dbRegistry.ts'
 import {
   cleanupDir,
   createDbNative,
@@ -77,7 +77,7 @@ async function main() {
     if (cfg.doScan) {
       const done = waitForScanDone(priv, false)
       const t0 = performance.now()
-      await control.call(methods.start_scan, BigInt(CLIENT_ID), 1, emptyScanQuery(false))
+      await control.call(methods.start_scan, streamHandle(CLIENT_ID, 1, 1n), emptyScanQuery(false))
       const count = await done
       printPhase('node', 'scan', count, performance.now() - t0)
     }
@@ -85,7 +85,7 @@ async function main() {
     if (cfg.doScanKeys) {
       const done = waitForScanDone(priv, true)
       const t0 = performance.now()
-      await control.call(methods.start_scan, BigInt(CLIENT_ID), 1, emptyScanQuery(true))
+      await control.call(methods.start_scan, streamHandle(CLIENT_ID, 1, 2n), emptyScanQuery(true))
       const count = await done
       printPhase('node', 'scan_keys', count, performance.now() - t0)
     }

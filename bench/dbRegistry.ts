@@ -13,11 +13,12 @@ import {
 } from '@wa-os/ts-rpc'
 
 export const DB_MESSAGES = [
-  'db_socket_opened',
-  'db_scan_item',
-  'db_scan_key',
-  'db_scan_done',
-  'db_scan_error',
+  'stream_opened',
+  'stream_item',
+  'stream_key',
+  'stream_done',
+  'stream_error',
+  'stream_reset',
   'db_visible_event',
   'db_durable_event',
 ] as const
@@ -120,6 +121,27 @@ export function createDbTypeRegistry(): TypeRegistry {
   registry.registerType(writeEntryVec)
   registry.registerType(scanQuery)
 
+  const channelHandle = TypeDescription.create({
+    name: 'channel_handle',
+    kind: TypeKind.Object,
+    members: [
+      { name: 'pid', type: uint64, annotations: [] },
+      { name: 'socket', type: uint32, annotations: [] },
+    ],
+  })
+  const streamHandle = TypeDescription.create({
+    name: 'stream_handle',
+    kind: TypeKind.Object,
+    members: [
+      { name: 'pid', type: uint64, annotations: [] },
+      { name: 'socket', type: uint32, annotations: [] },
+      { name: 'stream_id', type: uint64, annotations: [] },
+      { name: 'since_timestamp', type: uint64, annotations: [] },
+    ],
+  })
+  registry.registerType(channelHandle)
+  registry.registerType(streamHandle)
+
   const unknownExc = TypeDescription.create({
     name: 'unknown_exception',
     kind: TypeKind.Exception,
@@ -155,40 +177,45 @@ export function createDbTypeRegistry(): TypeRegistry {
   registry.registerType(dbIo)
 
   registry.registerType(TypeDescription.create({
-    name: 'db_socket_opened',
+    name: 'stream_opened',
     kind: TypeKind.Message,
     members: [],
   }))
   registry.registerType(TypeDescription.create({
-    name: 'db_scan_item',
+    name: 'stream_item',
     kind: TypeKind.Message,
     members: [
-      { name: 'scan_uid', type: uint64, annotations: [] },
+      { name: 'stream_id', type: uint64, annotations: [] },
       { name: 'key', type: binary, annotations: [] },
       { name: 'value', type: binary, annotations: [] },
       { name: 'timestamp', type: uint64, annotations: [] },
     ],
   }))
   registry.registerType(TypeDescription.create({
-    name: 'db_scan_key',
+    name: 'stream_key',
     kind: TypeKind.Message,
     members: [
-      { name: 'scan_uid', type: uint64, annotations: [] },
+      { name: 'stream_id', type: uint64, annotations: [] },
       { name: 'key', type: binary, annotations: [] },
     ],
   }))
   registry.registerType(TypeDescription.create({
-    name: 'db_scan_done',
+    name: 'stream_done',
     kind: TypeKind.Message,
-    members: [{ name: 'scan_uid', type: uint64, annotations: [] }],
+    members: [{ name: 'stream_id', type: uint64, annotations: [] }],
   }))
   registry.registerType(TypeDescription.create({
-    name: 'db_scan_error',
+    name: 'stream_error',
     kind: TypeKind.Message,
     members: [
-      { name: 'scan_uid', type: uint64, annotations: [] },
+      { name: 'stream_id', type: uint64, annotations: [] },
       { name: 'message', type: stringType, annotations: [] },
     ],
+  }))
+  registry.registerType(TypeDescription.create({
+    name: 'stream_reset',
+    kind: TypeKind.Message,
+    members: [{ name: 'stream_id', type: uint64, annotations: [] }],
   }))
   registry.registerType(TypeDescription.create({
     name: 'db_visible_event',
@@ -231,8 +258,7 @@ export function createDbTypeRegistry(): TypeRegistry {
     name: 'db.open_socket',
     kind: TypeKind.Function,
     members: [
-      { name: 'client_pid', type: uint64, annotations: [] },
-      { name: 'client_socket', type: uint32, annotations: [] },
+      { name: 'channel', type: channelHandle, annotations: [] },
     ],
     item: voidType,
   })
@@ -240,8 +266,7 @@ export function createDbTypeRegistry(): TypeRegistry {
     name: 'db.close_socket',
     kind: TypeKind.Function,
     members: [
-      { name: 'client_pid', type: uint64, annotations: [] },
-      { name: 'client_socket', type: uint32, annotations: [] },
+      { name: 'channel', type: channelHandle, annotations: [] },
     ],
     item: voidType,
   })
@@ -249,8 +274,7 @@ export function createDbTypeRegistry(): TypeRegistry {
     name: 'db.start_scan',
     kind: TypeKind.Function,
     members: [
-      { name: 'client_pid', type: uint64, annotations: [] },
-      { name: 'client_socket', type: uint32, annotations: [] },
+      { name: 'stream', type: streamHandle, annotations: [] },
       { name: 'query', type: scanQuery, annotations: [] },
     ],
     item: voidType,
@@ -258,7 +282,7 @@ export function createDbTypeRegistry(): TypeRegistry {
   const cancelScanFn = TypeDescription.create({
     name: 'db.cancel_scan',
     kind: TypeKind.Function,
-    members: [{ name: 'scan_uid', type: uint64, annotations: [] }],
+    members: [{ name: 'stream_id', type: uint64, annotations: [] }],
     item: voidType,
   })
 
@@ -351,6 +375,28 @@ export function dbMethods(registry: TypeRegistry): DbMethods {
     close_socket: id('close_socket'),
     start_scan: id('start_scan'),
     cancel_scan: id('cancel_scan'),
+  }
+}
+
+export function streamHandle(
+  pid: number | bigint,
+  socket: number,
+  streamId: number | bigint,
+  sinceTimestamp: number | bigint = 0n
+) {
+  return {
+    pid: typeof pid === 'bigint' ? pid : BigInt(pid),
+    socket,
+    stream_id: typeof streamId === 'bigint' ? streamId : BigInt(streamId),
+    since_timestamp:
+      typeof sinceTimestamp === 'bigint' ? sinceTimestamp : BigInt(sinceTimestamp),
+  }
+}
+
+export function channelHandle(pid: number | bigint, socket: number) {
+  return {
+    pid: typeof pid === 'bigint' ? pid : BigInt(pid),
+    socket,
   }
 }
 

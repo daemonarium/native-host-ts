@@ -131,7 +131,10 @@ export async function openPrivateChannel(
   clientPid: number,
   clientSocket: number
 ): Promise<void> {
-  await control.call(methods.open_socket, BigInt(clientPid), clientSocket)
+  await control.call(methods.open_socket, {
+    pid: BigInt(clientPid),
+    socket: clientSocket,
+  })
 }
 
 export async function fillViaRpc(
@@ -160,14 +163,17 @@ export async function waitForScanDone(
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     let count = 0
-    const itemType = keysOnly ? 'db_scan_key' : 'db_scan_item'
+    const itemType = keysOnly ? 'stream_key' : 'stream_item'
     priv.onMessage(itemType, () => {
       count++
     })
-    priv.onMessage('db_scan_done', () => {
+    priv.onMessage('stream_done', () => {
       resolve(count)
     })
-    priv.onMessage('db_scan_error', (msg) => {
+    priv.onMessage('stream_reset', () => {
+      count = 0
+    })
+    priv.onMessage('stream_error', (msg) => {
       const m = msg as { message?: string }
       reject(new Error(m.message ?? 'scan error'))
     })
