@@ -61,7 +61,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
   let db: ModuleProcess
   let control: SocketRpcClient
   let priv: SocketRpcClient
-  let methods: DbMethods
+  let methods: Omit<DbMethods, 'cancel_scan'>
   let scanWaiter: {
     items: Array<{ key: string, value: string, uid: bigint }>
     keys: string[]
@@ -126,7 +126,6 @@ describe('kv-storage-mem WASM RAM DB', () => {
       open_socket: methodId(dbRegistry, 'open_socket'),
       close_socket: methodId(dbRegistry, 'close_socket'),
       start_scan: methodId(dbRegistry, 'start_scan'),
-      cancel_scan: methodId(dbRegistry, 'cancel_scan'),
     }
 
     const controlSock = client.createSocket(0, SOCKET_OPTS)
@@ -217,19 +216,20 @@ describe('kv-storage-mem WASM RAM DB', () => {
     expect(result.keys.length).to.equal(2)
   })
 
-  it('cancel_scan emits stream_done', async () => {
-    await control.call(methods.batch, [
-      { key: toBin('k0'), value: toBin('v'), timestamp: 10n },
-      { key: toBin('k1'), value: toBin('v'), timestamp: 11n },
-      { key: toBin('k2'), value: toBin('v'), timestamp: 12n },
-    ], DURABLE_OPTS)
-
-    const done = waitScan()
-    await control.call(methods.start_scan, streamHandle(clientPid, 1, 1n), emptyScanQuery(false))
-    const result = await done
-    if (result.items.length > 0) {
-      await control.call(methods.cancel_scan, result.items[0].uid)
+  it('stream_cancel on the private channel emits stream_done', async () => {
+    const entries = []
+    for (let i = 0; i < 40; i++) {
+      const n = String(i).padStart(3, '0')
+      entries.push({ key: toBin(`z${n}`), value: toBin('v'), timestamp: BigInt(1000 + i) })
     }
+    await control.call(methods.batch, entries, DURABLE_OPTS)
+
+    const streamId = 99n
+    const done = waitScan()
+    await control.call(methods.start_scan, streamHandle(clientPid, 1, streamId), emptyScanQuery(false))
+    priv.sendMessage('stream_cancel', { stream_id: streamId })
+    const result = await done
+    expect(result).to.be.ok
   })
 
   it('notify_visible / notify_durable order matches write mode', async () => {
