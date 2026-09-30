@@ -126,6 +126,7 @@ describe('kv-storage-mem WASM RAM DB', () => {
       open_socket: methodId(dbRegistry, 'open_socket'),
       close_socket: methodId(dbRegistry, 'close_socket'),
       start_scan: methodId(dbRegistry, 'start_scan'),
+      mark_prefix_min_ts: methodId(dbRegistry, 'mark_prefix_min_ts'),
     }
 
     const controlSock = client.createSocket(0, SOCKET_OPTS)
@@ -280,5 +281,45 @@ describe('kv-storage-mem WASM RAM DB', () => {
     const result = await done
     const hit = result.items.filter((i) => i.key.startsWith('d'))
     expect(hit.map((i) => i.key)).to.deep.equal(['d3'])
+  })
+
+  it('mark_prefix_min_ts drops keys under the prefix with timestamp < min_ts', async () => {
+    await control.call(methods.set, toBin('ret/old'), toBin('A'), 1n, DURABLE_OPTS)
+    await control.call(methods.set, toBin('ret/new'), toBin('B'), 10n, DURABLE_OPTS)
+    await control.call(methods.set, toBin('keep/x'), toBin('C'), 1n, DURABLE_OPTS)
+    await control.call(methods.mark_prefix_min_ts, toBin('ret/'), 5n)
+
+    const dropped = await control.call(methods.get, toBin('ret/old')) as { present: boolean }
+    expect(dropped.present).to.equal(false)
+    const kept = await control.call(methods.get, toBin('ret/new')) as {
+      present: boolean
+      value: Uint8Array
+    }
+    expect(kept.present).to.equal(true)
+    expect(fromBin(kept.value)).to.equal('B')
+    const other = await control.call(methods.get, toBin('keep/x')) as {
+      present: boolean
+      value: Uint8Array
+    }
+    expect(other.present).to.equal(true)
+    expect(fromBin(other.value)).to.equal('C')
+  })
+
+  it('mark_prefix_min_ts with UINT64_MAX drops the whole prefix', async () => {
+    await control.call(methods.set, toBin('wipe/a'), toBin('A'), 1n, DURABLE_OPTS)
+    await control.call(methods.set, toBin('wipe/b'), toBin('B'), 99n, DURABLE_OPTS)
+    await control.call(methods.set, toBin('stay'), toBin('S'), 1n, DURABLE_OPTS)
+    await control.call(methods.mark_prefix_min_ts, toBin('wipe/'), 2n ** 64n - 1n)
+
+    const a = await control.call(methods.get, toBin('wipe/a')) as { present: boolean }
+    const b = await control.call(methods.get, toBin('wipe/b')) as { present: boolean }
+    const stay = await control.call(methods.get, toBin('stay')) as {
+      present: boolean
+      value: Uint8Array
+    }
+    expect(a.present).to.equal(false)
+    expect(b.present).to.equal(false)
+    expect(stay.present).to.equal(true)
+    expect(fromBin(stay.value)).to.equal('S')
   })
 })

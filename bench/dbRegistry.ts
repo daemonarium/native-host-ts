@@ -33,9 +33,10 @@ export interface DbMethods {
   close_socket: number
   start_scan: number
   cancel_scan: number
+  mark_prefix_min_ts: number
 }
 
-/** Hand-written registry matching waos::db method order (0=get … 6=cancel_scan). */
+/** Hand-written registry matching waos::db method order (0=get … 7=mark_prefix_min_ts). */
 export function createDbTypeRegistry(): TypeRegistry {
   const registry = new TypeRegistry()
   const t = (name: string) => {
@@ -297,6 +298,15 @@ export function createDbTypeRegistry(): TypeRegistry {
     members: [{ name: 'stream_id', type: uint64, annotations: [] }],
     item: voidType,
   })
+  const markPrefixFn = TypeDescription.create({
+    name: 'db.mark_prefix_min_ts',
+    kind: TypeKind.Function,
+    members: [
+      { name: 'prefix', type: binary, annotations: [] },
+      { name: 'min_ts', type: uint64, annotations: [] },
+    ],
+    item: voidType,
+  })
 
   const dbType = TypeDescription.create({
     name: 'db',
@@ -309,6 +319,7 @@ export function createDbTypeRegistry(): TypeRegistry {
       { name: 'close_socket', type: closeFn, annotations: [] },
       { name: 'start_scan', type: startScanFn, annotations: [] },
       { name: 'cancel_scan', type: cancelScanFn, annotations: [] },
+      { name: 'mark_prefix_min_ts', type: markPrefixFn, annotations: [] },
     ],
   })
   registry.registerType(getFn)
@@ -318,6 +329,7 @@ export function createDbTypeRegistry(): TypeRegistry {
   registry.registerType(closeFn)
   registry.registerType(startScanFn)
   registry.registerType(cancelScanFn)
+  registry.registerType(markPrefixFn)
   registry.registerType(dbType)
   registry.assignMethodIds()
   return registry
@@ -387,6 +399,7 @@ export function dbMethods(registry: TypeRegistry): DbMethods {
     close_socket: id('close_socket'),
     start_scan: id('start_scan'),
     cancel_scan: id('cancel_scan'),
+    mark_prefix_min_ts: id('mark_prefix_min_ts'),
   }
 }
 
