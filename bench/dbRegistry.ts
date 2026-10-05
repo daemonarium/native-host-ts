@@ -202,6 +202,7 @@ export function createDbTypeRegistry(): TypeRegistry {
     members: [
       { name: 'stream_id', type: uint64, annotations: [] },
       { name: 'key', type: binary, annotations: [] },
+      { name: 'timestamp', type: uint64, annotations: [] },
     ],
   }))
   registry.registerType(TypeDescription.create({
