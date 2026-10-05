@@ -51,6 +51,7 @@ export function createDbTypeRegistry(): TypeRegistry {
   const binary = t('binary')
   const uint32 = t('uint32')
   const uint64 = t('uint64')
+  const uint8 = t('uint8')
   const stringType = t('string')
 
   const writeMode = TypeDescription.create({
@@ -140,6 +141,7 @@ export function createDbTypeRegistry(): TypeRegistry {
       { name: 'socket', type: uint32, annotations: [] },
       { name: 'stream_id', type: uint64, annotations: [] },
       { name: 'since_timestamp', type: uint64, annotations: [] },
+      { name: 'flags', type: uint8, annotations: [] },
     ],
   })
   registry.registerType(channelHandle)
@@ -407,7 +409,8 @@ export function streamHandle(
   pid: number | bigint,
   socket: number,
   streamId: number | bigint,
-  sinceTimestamp: number | bigint = 0n
+  sinceTimestamp: number | bigint = 0n,
+  flags = 0
 ) {
   return {
     pid: typeof pid === 'bigint' ? pid : BigInt(pid),
@@ -415,6 +418,7 @@ export function streamHandle(
     stream_id: typeof streamId === 'bigint' ? streamId : BigInt(streamId),
     since_timestamp:
       typeof sinceTimestamp === 'bigint' ? sinceTimestamp : BigInt(sinceTimestamp),
+    flags,
   }
 }
 
