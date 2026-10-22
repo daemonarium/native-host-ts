@@ -3,9 +3,9 @@ import {
   Kernel,
   LocalProcess,
   NativeProcess,
-  Direction,
-} from '@wa-os/ts-kernel'
-import type { Process } from '@wa-os/ts-kernel'
+  kernelApi,
+} from '@daemonarium/kernel'
+import type { Process } from '@daemonarium/kernel'
 import nativeHost from '../index.js'
 
 function transferPartial(
@@ -66,7 +66,7 @@ describe('native-host NativeProcess', () => {
       flags: 0,
     })
 
-    await kernel.bind(0, 0, 1, 0, Direction.BOTH)
+    await kernel.bind(0, 0, 1, 0, kernelApi.direction.BOTH)
 
     const payload = textEncoder().encode('ping')
     const written = client.getSocket(0)!.write(payload, payload.length)
@@ -108,7 +108,7 @@ describe('native-host NativeProcess', () => {
       drainEventThreshold: 4,
       flags: 0,
     })
-    await kernel.bind(0, 0, 1, 0, Direction.BOTH)
+    await kernel.bind(0, 0, 1, 0, kernelApi.direction.BOTH)
 
     const payload = new Uint8Array(8192)
     for (let i = 0; i < payload.length; i++) {
@@ -178,7 +178,7 @@ describe('native-host NativeProcess', () => {
       drainEventThreshold: 4,
       flags: 0,
     })
-    await kernel.bind(0, 0, 1, 0, Direction.BOTH)
+    await kernel.bind(0, 0, 1, 0, kernelApi.direction.BOTH)
 
     const payload = new Uint8Array(2048)
     payload.fill(0xab)
@@ -255,8 +255,8 @@ describe('native-host NativeProcess', () => {
     echo.createSocket(0, opts)
     echo.createSocket(1, opts)
 
-    await kernel.bind(0, 0, 2, 0, Direction.BOTH)
-    await kernel.bind(1, 0, 2, 1, Direction.BOTH)
+    await kernel.bind(0, 0, 2, 0, kernelApi.direction.BOTH)
+    await kernel.bind(1, 0, 2, 1, kernelApi.direction.BOTH)
 
     const a = textEncoder().encode('alpha')
     const b = textEncoder().encode('beta')
@@ -302,8 +302,8 @@ describe('native-host NativeProcess', () => {
     echo1.createSocket(0, opts)
     echo2.createSocket(0, opts)
 
-    await kernel.bind(0, 0, 2, 0, Direction.BOTH)
-    await kernel.bind(1, 0, 3, 0, Direction.BOTH)
+    await kernel.bind(0, 0, 2, 0, kernelApi.direction.BOTH)
+    await kernel.bind(1, 0, 3, 0, kernelApi.direction.BOTH)
 
     const p1 = textEncoder().encode('one')
     const p2 = textEncoder().encode('two')

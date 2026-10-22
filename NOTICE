@@ -1,0 +1,11 @@
+native-host-ts
+Copyright (c) 2026 Magowie Sp. z o.o.
+
+This addon compiles native_process.cpp and circular_buffer.c from
+daemonarium/rpc-cpp v0.1.0:
+https://github.com/daemonarium/rpc-cpp
+
+node-addon-api is MIT:
+https://github.com/nodejs/node-addon-api
+
+This tag does not use the reflection toolchain.

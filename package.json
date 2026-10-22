@@ -1,35 +1,44 @@
 {
-  "name": "@wa-os/native-host",
+  "name": "@daemonarium/native-host",
   "version": "0.1.0",
-  "description": "N-API addon hosting native_process services (echo)",
+  "description": "Node addon for Daemonarium native processes. This tag registers the echo service.",
   "main": "index.js",
   "types": "index.d.ts",
-  "author": "Michał Łaszczewski",
+  "author": "Magowie Sp. z o.o.",
   "license": "MIT",
   "type": "module",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "src",
+    "CMakeLists.txt",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "install": "cmake-js compile",
-    "rebuild": "cmake-js rebuild",
-    "rebuild:db": "cmake-js reconfigure --directory . --out build --cxx ../cpp-compiler/sysroot/usr/local/bin/clang++ --cc ../cpp-compiler/sysroot/usr/local/bin/clang --CDNATIVE_HOST_DB=ON && cmake-js build --directory . --out build --CDNATIVE_HOST_DB=ON",
-    "bench:db": "tsx bench/db-rpc.mts",
-    "bench:db-wasm": "tsx bench/db-wasm.mts",
-    "bench:db-ram-wasm": "tsx bench/db-ram-wasm.mts",
-    "test": "tsx ../node_modules/mocha/bin/mocha.js --timeout 20000 'tests/**/*.test.ts'"
+    "test": "tsx node_modules/.bin/mocha --timeout 20000 'tests/**/*.test.ts'"
   },
   "dependencies": {
-    "@wa-os/ts-kernel": "*",
-    "@wa-os/ts-rpc": "*",
+    "cmake-js": "^7.3.0",
     "node-addon-api": "^8.3.0"
   },
+  "peerDependencies": {
+    "@daemonarium/kernel": "^0.1.0"
+  },
   "devDependencies": {
-    "cmake-js": "^7.3.0",
-    "typescript": "~5.9.0",
+    "@daemonarium/kernel": "0.1.0",
+    "@daemonarium/rpc": "0.1.0",
     "@types/chai": "^4.3.11",
     "@types/mocha": "^10.0.0",
     "@types/node": "^22.18.11",
     "chai": "^4.3.10",
     "mocha": "^10.2.0",
-    "tsx": "^4.7.0"
+    "tsx": "^4.7.0",
+    "typescript": "~5.9.0"
   },
   "cmake-js": {
     "runtime": "node",

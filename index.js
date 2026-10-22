@@ -18,7 +18,7 @@ function resolveAddonPath() {
     }
   }
   throw new Error(
-    'nativeHost.node not found. Run: npm install / cmake-js compile in native-host'
+    'nativeHost.node not found. Run npm install in this package so cmake-js can compile it.'
   )
 }
 

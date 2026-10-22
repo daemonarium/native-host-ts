@@ -1,4 +1,4 @@
-import type { NativeProcessAddon } from '@wa-os/ts-kernel'
+import type { NativeProcessAddon } from '@daemonarium/kernel'
 
 declare const addon: NativeProcessAddon
 export default addon
