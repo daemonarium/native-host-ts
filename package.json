@@ -20,7 +20,7 @@
   },
   "scripts": {
     "install": "cmake-js compile",
-    "test": "tsx node_modules/.bin/mocha --timeout 20000 'tests/**/*.test.ts'"
+    "test": "tsx \"$(node -p 'require.resolve(\"mocha/bin/mocha.js\")')\" --timeout 20000 'tests/**/*.test.ts'"
   },
   "dependencies": {
     "cmake-js": "^7.3.0",

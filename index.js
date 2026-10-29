@@ -7,11 +7,19 @@ const require = createRequire(import.meta.url)
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 function resolveAddonPath() {
-  const candidates = [
-    join(__dirname, 'build', 'Release', 'nativeHost.node'),
-    join(__dirname, 'build', 'Debug', 'nativeHost.node'),
-    join(__dirname, 'build', 'nativeHost.node'),
-  ]
+  const roots = []
+  if (process.env.NATIVE_HOST_BUILD) {
+    roots.push(join(__dirname, process.env.NATIVE_HOST_BUILD))
+  }
+  roots.push(join(__dirname, 'build'))
+  const candidates = []
+  for (const root of roots) {
+    candidates.push(
+      join(root, 'Release', 'nativeHost.node'),
+      join(root, 'Debug', 'nativeHost.node'),
+      join(root, 'nativeHost.node'),
+    )
+  }
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
       return candidate

@@ -4,10 +4,29 @@ project(nativeHost CXX C)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(RPC_CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/extern/rpc-cpp)
-if(NOT EXISTS ${RPC_CPP_DIR}/src/native/native_process.cpp)
-  message(FATAL_ERROR
-    "rpc-cpp not found. git submodule add https://github.com/daemonarium/rpc-cpp.git extern/rpc-cpp")
+if(NOT TARGET cpp_rpc)
+  include(FetchContent)
+  FetchContent_Declare(cpp_rpc
+    GIT_REPOSITORY https://github.com/daemonarium/rpc-cpp.git
+    GIT_TAG v0.2.0
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(cpp_rpc)
+endif()
+set(RPC_CPP_DIR ${cpp_rpc_SOURCE_DIR})
+
+# node-addon-api lives next to this package, or hoisted at the stack workspace root.
+set(_addon_search "${CMAKE_CURRENT_SOURCE_DIR}")
+set(NODE_ADDON_API_DIR "")
+foreach(_i RANGE 6)
+  if(EXISTS "${_addon_search}/node_modules/node-addon-api/napi.h")
+    set(NODE_ADDON_API_DIR "${_addon_search}/node_modules/node-addon-api")
+    break()
+  endif()
+  get_filename_component(_addon_search "${_addon_search}" DIRECTORY)
+endforeach()
+if(NODE_ADDON_API_DIR STREQUAL "")
+  message(FATAL_ERROR "node-addon-api not found. Run npm install in the stack workspace.")
 endif()
 
 # cmake-js provides CMAKE_JS_INC / CMAKE_JS_SRC when invoked via cmake-js
@@ -34,7 +53,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
   ${RPC_CPP_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_JS_INC}
-  ${CMAKE_CURRENT_SOURCE_DIR}/node_modules/node-addon-api
+  ${NODE_ADDON_API_DIR}
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
